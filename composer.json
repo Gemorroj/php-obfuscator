@@ -1,0 +1,32 @@
+{
+    "name": "gemorroj/php-obfuscator",
+    "description": "PHP obfuscator",
+    "keywords": ["php","obfuscator","obfuscation"],
+    "type": "library",
+    "license": "LGPL-3.0-or-later",
+    "authors": [
+        {
+            "name": "Gemorroj"
+        }
+    ],
+    "require": {
+        "php": ">=8.4",
+        "ext-tokenizer": "*",
+        "ext-zlib": "*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^12.1.3",
+        "friendsofphp/php-cs-fixer": "^3.75",
+        "phpstan/phpstan": "^2.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "PhpObfuscator\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "PhpObfuscator\\Tests\\": "tests/"
+        }
+    }
+}

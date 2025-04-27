@@ -1,91 +1,61 @@
-<h1 align="center">🚀 php-obfuscator</h1>
+# PHP code obfuscator
 
-**php-obfuscator** - библиотека для обфускации PHP кода
+[![License](https://poser.pugx.org/gemorroj/php-obfuscator/license)](https://packagist.org/packages/gemorroj/php-obfuscator)
+[![Latest Stable Version](https://poser.pugx.org/gemorroj/php-obfuscator/v/stable)](https://packagist.org/packages/gemorroj/php-obfuscator)
+[![Continuous Integration](https://github.com/Gemorroj/php-obfuscator/workflows/Continuous%20Integration/badge.svg)](https://github.com/Gemorroj/php-obfuscator/actions?query=workflow%3A%22Continuous+Integration%22)
 
-## Установка
 
-```cmd
-php qero.phar i KRypt0nn/php-obfuscator
+### Requirements:
+- PHP >= 8.4
+- ext-tokenizer
+- ext-zlib
+
+
+### Installation:
+```bash
+composer require gemorroj/php-obfuscator
 ```
+
+### Example
 
 ```php
 <?php
+declare(strict_types=1);
 
-require 'qero-packages/autoload.php';
+use PhpObfuscator\PhpObfuscator;
+
+$code = '<?php echo "Hello World!";';
+
+$phpObfuscator = new PhpObfuscator();
+$phpObfuscator->addDefaultModules();
+$obfuscatedCode = $phpObfuscator->obfuscate($code);
+
+echo $obfuscatedCode; // <?php echo~base64_decode('t5qTk5DfqJCNk5ve');
 ```
 
-[Что такое Qero?](https://github.com/KRypt0nn/Qero)
-
-<p align="center">или</p>
-
-Скачайте репозиторий и подключите главный файл пакета:
+### Example with license
 
 ```php
 <?php
+declare(strict_types=1);
 
-require 'php-obfuscator/obfuscator.php';
+use PhpObfuscator\PhpObfuscator;
+
+$code = '<?php return "Hello World!";';
+$key = 'keystr';
+$licenseObj = new License($key);
+$license = $licenseObj->getLicense(\time() + 10000000);
+
+$phpObfuscator = new PhpObfuscator();
+$phpObfuscator->addDefaultModules();
+$phpObfuscator->addModule($licenseObj);
+
+$obfuscatedCode = $phpObfuscator->obfuscate($code);
+
+echo $obfuscatedCode;
+/*
+<?php
+$license='license goes here';
+(function($license){$GLOBALS[(str_rot13('pue')(83).strrev('rhc')(110).base64_decode('Y2hy')(53).base64_decode('Y2hy')(51).base64_decode('Y2hy')(102).str_rot13('pue')(50))]=$license;$c=str_rot13('urkqrp')(@str_rot13('rkcybqr')((base64_decode('YmFzZTY0X2RlY29kZQ==')('GQ==')^(strrev('31tor_rts')('4'))),$GLOBALS[~strrev('edoced_46esab')('rJHKzJnN')])[1]);$D=base64_decode('c3Vic3Ry')(str_rot13('zq5')($c.str_rot13('fgeeri')('rtsyek')),0,15);if(strrev('emit')()>$c||str_rot13('fgegbhccre')($D.(str_rot13('onfr64_qrpbqr')('YA==')^(str_rot13('fgeeri')('M'))).str_rot13('qrpurk')($c).strrev('verrts')('-').strrev('rtsbus')(base64_decode('bWQ1')($D^str_rot13('fge_ercrng')((strrev('edoced_46esab')('JgsdGCMl')^(base64_decode('c3RycmV2')('WWkdnM'))),3)),0,10))!=$GLOBALS[(base64_decode('YmFzZTY0X2RlY29kZQ==')('HiVzCgUH')^(strrev('31tor_rts')('ZXS9p5')))]){die(strrev('31tor_rts')('Lbhe yvprafr vf vainyvq'));}})($license);unset($license);return strrev('!dlroW olleH');
+*/
 ```
-
-## Быстрый старт
-
-Библиотека **php-obfuscator** построена по принципу расширяемости. Для обфускации кода можно использовать два варианта класса `Obfuscator\Obfuscator`:
-
-```php
-use Obfuscator\Obfuscator;
-
-use Obfuscator\Modules\{
-    WhitespaceStrip,
-    License
-};
-
-$obfuscator = new Obfuscator ([
-    'pipeline' => [
-        new WhitespaceStrip,
-        new License ([
-            'key' => '#JDFALK:ESF#(UR(URPFOIASJEF*#IWY*&RT(*&WHJKFD'
-        ])
-    ]
-]);
-
-$obfuscated = $obfuscator->obfuscate ($code);
-```
-
-или
-
-```php
-use Obfuscator\Obfuscator;
-
-use Obfuscator\Modules\{
-    WhitespaceStrip,
-    License
-};
-
-$obfuscated = Obfuscator::process ($code, [
-    'pipeline' => [
-        new WhitespaceStrip,
-        new License ([
-            'key' => '#JDFALK:ESF#(UR(URPFOIASJEF*#IWY*&RT(*&WHJKFD'
-        ])
-    ]
-]);
-```
-
-При этом в качестве алгоритмов обфускации кода выступают модули, передаваемые в параметр pipeline. Процесс обфускации выглядит следующим образом: сперва код обрабатывает первый модуль из pipeline, затем второй, третий и так по порядку
-
-Каждый модуль может иметь свои настройки. За подробностями можно обратиться к коду
-
-## Пример работы
-
-```php
-use Obfuscator\Obfuscator;
-
-echo Obfuscator::process (file_get_contents (__FILE__));
-```
-
-Вывод:
-
-```php
-<?php require str_rot13('boshfpngbe.cuc');use Obfuscator\Obfuscator;echo Obfuscator::process(base64_decode((chr(hexdec('5a')).chr(base_convert('11001',3,10)).chr(base_convert('1230',4,10)).chr(0x73).chr(31^69).chr(4386/51).chr(101-44).chr(3^109).chr(-ord('T')+174).chr(sqrt(7744)).chr(23+59).chr(hexdec('66')).chr(1780/20).chr(ord('B')+-16).chr(ord('u')+-60).chr(0x75).chr(190-90).chr(26+45).chr(ord('y')+-35).chr(ord('N')+39).chr(base_convert('3d',29,10)).chr(97-25).chr(0x4d).chr(-ord('6')+115)))(__FILE__));
-```
-
-Автор: [Подвирный Никита](https://vk.com/technomindlp). Специально для [Enfesto Studio Group](https://vk.com/hphp_convertation)
