@@ -76,7 +76,7 @@ class StringEncoder implements ModuleInterface
 
         // Кастомные функции шифрования
         $advancedEncoders = [
-            function (string $string): string {
+            static function (string $string): string {
                 $return = [];
                 $length = \strlen($string);
 
@@ -87,7 +87,7 @@ class StringEncoder implements ModuleInterface
                 return '('.\implode('.', $return).')';
             },
 
-            function (string $string): string {
+            static function (string $string): string {
                 return '~base64_decode(\''.\base64_encode(~$string).'\')';
             },
 
