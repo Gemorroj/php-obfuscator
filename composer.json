@@ -11,11 +11,11 @@
     ],
     "require": {
         "php": ">=8.4",
-        "ext-tokenizer": "*",
+        "nikic/php-parser": "^5.9",
         "ext-zlib": "*"
     },
     "require-dev": {
-        "phpunit/phpunit": "^12.5.17||^13",
+        "phpunit/phpunit": "^13.4",
         "friendsofphp/php-cs-fixer": "^3.95",
         "phpstan/phpstan": "^2.3"
     },

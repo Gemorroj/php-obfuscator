@@ -2,12 +2,15 @@
 
 namespace PhpObfuscator;
 
+use PhpObfuscator\Module\CommentStrip;
 use PhpObfuscator\Module\IntegerEncoder;
 use PhpObfuscator\Module\License;
 use PhpObfuscator\Module\SilentCalls;
 use PhpObfuscator\Module\StringEncoder;
 use PhpObfuscator\Module\VarOptimizer;
-use PhpObfuscator\Module\WhitespaceStrip;
+use PhpParser\NodeTraverser;
+use PhpParser\Parser;
+use PhpParser\ParserFactory;
 
 class PhpObfuscator
 {
@@ -16,23 +19,31 @@ class PhpObfuscator
      */
     public array $modules = [];
 
+    private Parser $parser;
+
+    private MinifiedPrettyPrinter $printer;
+
+    public function __construct()
+    {
+        $this->parser = new ParserFactory()->createForHostVersion();
+        $this->printer = new MinifiedPrettyPrinter();
+    }
+
     public function obfuscate(string $code): string
     {
-        foreach ($this->modules as $module) {
-            $obfuscated = '';
-            $tokens = \token_get_all($code);
-
-            /*
-             * token: "[char]" or [TOKEN_ID, "[char(s)]", [line]]
-             */
-            foreach ($tokens as $position => $token) {
-                $obfuscated .= $module->process($token, $tokens, $position);
-            }
-
-            $code = $obfuscated;
+        if ([] === $this->modules) {
+            return $code;
         }
 
-        return $code;
+        $ast = $this->parser->parse($code) ?? [];
+
+        foreach ($this->modules as $module) {
+            $traverser = new NodeTraverser();
+            $traverser->addVisitor($module);
+            $ast = $traverser->traverse($ast);
+        }
+
+        return $this->printer->prettyPrintFile($ast);
     }
 
     public function addDefaultModules(): self
@@ -41,7 +52,7 @@ class PhpObfuscator
         $this->modules[] = new SilentCalls();
         $this->modules[] = new StringEncoder();
         $this->modules[] = new IntegerEncoder();
-        $this->modules[] = new WhitespaceStrip();
+        $this->modules[] = new CommentStrip();
 
         return $this;
     }

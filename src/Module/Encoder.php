@@ -2,6 +2,12 @@
 
 namespace PhpObfuscator\Module;
 
+use PhpParser\Node\Arg;
+use PhpParser\Node\Expr;
+use PhpParser\Node\Expr\FuncCall;
+use PhpParser\Node\Name;
+use PhpParser\Node\Scalar\String_;
+
 /**
  * Общий набор базовых функций шифрования строк.
  */
@@ -17,24 +23,23 @@ final class Encoder
     ];
 
     /**
-     * Шифрование строки случайным базовым шифровальщиком.
+     * Случайный базовый шифровальщик.
      *
-     * @return string выражение вида base64_decode('...')
+     * @return Expr выражение вида base64_decode('...')
      */
-    public static function encode(string $string): string
+    public static function encodeBasic(string $value): Expr
     {
-        $encoder = \random_int(0, \count(self::ENCODERS) - 1);
-        $encode = \array_keys(self::ENCODERS)[$encoder];
-        $decode = \array_values(self::ENCODERS)[$encoder];
+        $encoders = self::ENCODERS;
+        $encode = \array_keys($encoders)[\random_int(0, \count($encoders) - 1)];
 
-        return $decode.'(\''.self::escape($encode($string)).'\')';
+        return self::call($encoders[$encode], $encode($value));
     }
 
     /**
-     * Экранирование для вставки в строку в одинарных кавычках.
+     * Вызов функции с одним строковым аргументом.
      */
-    private static function escape(string $string): string
+    public static function call(string $function, string $argument): Expr
     {
-        return \str_replace(['\\', "'"], ['\\\\', "\\'"], $string);
+        return new FuncCall(new Name($function), [new Arg(new String_($argument))]);
     }
 }

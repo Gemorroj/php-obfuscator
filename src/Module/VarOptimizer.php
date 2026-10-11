@@ -3,166 +3,115 @@
 namespace PhpObfuscator\Module;
 
 use PhpObfuscator\ModuleInterface;
+use PhpParser\Node;
+use PhpParser\Node\Arg;
+use PhpParser\Node\Expr\FuncCall;
+use PhpParser\Node\Expr\Variable;
+use PhpParser\Node\Name;
+use PhpParser\Node\Param;
+use PhpParser\Node\PropertyHook;
+use PhpParser\NodeFinder;
+use PhpParser\NodeVisitorAbstract;
 
 /**
  * Модуль оптимизации имён переменных.
  */
-class VarOptimizer implements ModuleInterface
+class VarOptimizer extends NodeVisitorAbstract implements ModuleInterface
 {
     /**
-     * @var array<string, string> ассоциативный массив название переменных
+     * @var array<string, string> исходное имя => новое имя (без "$")
      */
-    private array $vars = [];
+    private array $map = [];
 
     /**
-     * @var array<int, true> позиции переменных, которые нельзя переименовывать
+     * @var array<string, true> имена, которые нельзя переименовывать
      */
-    private array $protected = [];
+    private array $reserved = [];
+
+    private int $counter = 0;
 
     /**
-     * Переменные-переменные ($$x, ${x}) несовместимы с переименованием.
+     * Переменные-переменные, именованные аргументы, property hooks и функции,
+     * обращающиеся к переменным по имени, несовместимы с переименованием.
      */
     private bool $disabled = false;
 
     /**
      * @param list<string> $whitelist список переменных, которые нельзя переименовывать
      */
-    public function __construct(private readonly array $whitelist = ['$GLOBALS', '$_SERVER', '$_ENV', '$_GET', '$_POST', '$_REQUEST', '$_FILES', '$_COOKIE', '$_SESSION', '$this', '$argv', '$argc', '$http_response_header'])
+    public function __construct(private readonly array $whitelist = ['GLOBALS', '_SERVER', '_ENV', '_GET', '_POST', '_REQUEST', '_FILES', '_COOKIE', '_SESSION', 'this', 'argv', 'argc', 'http_response_header'])
     {
     }
 
-    public function process(string|array $token, array $tokens, int $position): string
+    public function beforeTraverse(array $nodes): ?array
     {
-        if (0 === $position) {
-            $this->vars = [];
-            $this->disabled = $this->hasVariableVariables($tokens)
-                || $this->hasNameBasedFunctions($tokens)
-                || $this->hasNamedArguments($tokens)
-                || $this->hasPropertyHooks($tokens);
-            $this->protected = $this->findProtectedPositions($tokens);
+        $this->map = [];
+        $this->reserved = [];
+        $this->counter = 0;
+        $this->disabled = false;
+
+        $finder = new NodeFinder();
+
+        foreach ($this->whitelist as $name) {
+            $this->reserved[$name] = true;
         }
 
-        if (!\is_array($token) || \T_VARIABLE !== $token[0]) {
-            return \is_array($token) ? $token[1] : $token;
-        }
-
-        if ($this->disabled || \in_array($token[1], $this->whitelist, true)) {
-            return $token[1];
-        }
-
-        if (isset($this->protected[$position]) || $this->isStaticOrDynamicAccess($tokens, $position)) {
-            return $token[1];
-        }
-
-        if (!isset($this->vars[$token[1]])) {
-            $this->vars[$token[1]] = '$'.$this->getVarName(\count($this->vars));
-        }
-
-        return $this->vars[$token[1]];
-    }
-
-    /**
-     * Позиции переменных, которые являются объявлениями свойств или
-     * продвинутыми (promoted) параметрами конструктора.
-     *
-     * @param list<array{0: int, 1: string, 2: int}|string> $tokens
-     *
-     * @return array<int, true>
-     */
-    private function findProtectedPositions(array $tokens): array
-    {
-        $context = TokenContext::analyze($tokens);
-        $protected = [];
-
-        foreach ($tokens as $position => $token) {
-            if (!\is_array($token) || \T_VARIABLE !== $token[0]) {
-                continue;
-            }
-
-            // свойство класса, объявленное вне метода
-            if ('class' === $context['brace'][$position]
-                && 0 === $context['paren'][$position]
-                && 0 === $context['bracket'][$position]
-            ) {
-                $protected[$position] = true;
+        foreach ($finder->findInstanceOf($nodes, Variable::class) as $variable) {
+            if (!\is_string($variable->name)) {
+                $this->disabled = true;
 
                 continue;
             }
 
-            // продвинутый параметр конструктора: private string $x
-            if ($context['paren'][$position] > 0 && $this->hasPromotionModifier($tokens, $position)) {
-                $protected[$position] = true;
+            $this->reserved[$variable->name] = true;
+        }
+
+        foreach ($finder->findInstanceOf($nodes, Param::class) as $param) {
+            if ($param->isPromoted() && $param->var instanceof Variable && \is_string($param->var->name)) {
+                // promoted-параметр становится свойством — имя фиксировано
+                $this->reserved[$param->var->name] = true;
             }
         }
 
-        return $protected;
+        if ([] !== $finder->findInstanceOf($nodes, PropertyHook::class)) {
+            $this->disabled = true;
+        }
+
+        if ($this->hasNamedArguments($finder, $nodes) || $this->hasNameBasedCalls($finder, $nodes)) {
+            $this->disabled = true;
+        }
+
+        return null;
+    }
+
+    public function leaveNode(Node $node): Node|int|array|null
+    {
+        if (!$node instanceof Variable || !\is_string($node->name)) {
+            return null;
+        }
+
+        if ($this->disabled || isset($this->reserved[$node->name])) {
+            return null;
+        }
+
+        $name = $node->name;
+
+        if (!isset($this->map[$name])) {
+            $this->map[$name] = $this->nextName();
+        }
+
+        $node->name = $this->map[$name];
+
+        return null;
     }
 
     /**
-     * @param list<array{0: int, 1: string, 2: int}|string> $tokens
+     * @param Node[] $nodes
      */
-    private function hasPromotionModifier(array $tokens, int $position): bool
+    private function hasNamedArguments(NodeFinder $finder, array $nodes): bool
     {
-        for ($i = $position - 1; $i >= 0; --$i) {
-            $token = $tokens[$i];
-
-            if (\is_array($token)) {
-                if (\in_array($token[0], [\T_WHITESPACE, \T_COMMENT, \T_DOC_COMMENT], true)) {
-                    continue;
-                }
-
-                if (\in_array($token[0], [\T_PUBLIC, \T_PROTECTED, \T_PRIVATE, \T_READONLY], true)) {
-                    return true;
-                }
-
-                continue;
-            }
-
-            if (\in_array($token, ['(', ',', ';', '{', '}', '=', ')'], true)) {
-                return false;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * @param list<array{0: int, 1: string, 2: int}|string> $tokens
-     */
-    private function isStaticOrDynamicAccess(array $tokens, int $position): bool
-    {
-        $previous = TokenContext::previousSignificant($tokens, $position);
-
-        if (null === $previous) {
-            return false;
-        }
-
-        $prevToken = $tokens[$previous];
-
-        if ('$' === $prevToken) {
-            // $$var
-            return true;
-        }
-
-        // $obj::$prop, self::$prop, static::$prop
-        return \is_array($prevToken) && \T_DOUBLE_COLON === $prevToken[0];
-    }
-
-    /**
-     * @param list<array{0: int, 1: string, 2: int}|string> $tokens
-     */
-    private function hasVariableVariables(array $tokens): bool
-    {
-        foreach ($tokens as $token) {
-            if (\is_array($token)) {
-                if (\T_DOLLAR_OPEN_CURLY_BRACES === $token[0]) {
-                    return true;
-                }
-
-                continue;
-            }
-
-            if ('$' === $token) {
+        foreach ($finder->findInstanceOf($nodes, Arg::class) as $arg) {
+            if (null !== $arg->name) {
                 return true;
             }
         }
@@ -171,26 +120,18 @@ class VarOptimizer implements ModuleInterface
     }
 
     /**
-     * compact()/extract()/get_defined_vars() обращаются к переменным по имени.
+     * Имена переменных в compact()/extract()/get_defined_vars().
      *
-     * @param list<array{0: int, 1: string, 2: int}|string> $tokens
+     * @param Node[] $nodes
      */
-    private function hasNameBasedFunctions(array $tokens): bool
+    private function hasNameBasedCalls(NodeFinder $finder, array $nodes): bool
     {
-        $names = ['compact', 'extract', 'get_defined_vars'];
-
-        foreach ($tokens as $position => $token) {
-            if (!\is_array($token) || \T_STRING !== $token[0]) {
+        foreach ($finder->findInstanceOf($nodes, FuncCall::class) as $call) {
+            if (!$call->name instanceof Name) {
                 continue;
             }
 
-            if (!\in_array($token[1], $names, true)) {
-                continue;
-            }
-
-            $next = TokenContext::nextSignificant($tokens, $position);
-
-            if (null !== $next && '(' === $tokens[$next]) {
+            if (\in_array(\strtolower($call->name->toString()), ['compact', 'extract', 'get_defined_vars'], true)) {
                 return true;
             }
         }
@@ -198,64 +139,19 @@ class VarOptimizer implements ModuleInterface
         return false;
     }
 
-    /**
-     * Именованные аргументы ссылаются на имена параметров.
-     *
-     * @param list<array{0: int, 1: string, 2: int}|string> $tokens
-     */
-    private function hasNamedArguments(array $tokens): bool
+    private function nextName(): string
     {
-        foreach ($tokens as $position => $token) {
-            if (!\is_array($token) || \T_STRING !== $token[0]) {
-                continue;
-            }
+        do {
+            $name = $this->nameForIndex($this->counter++);
+        } while (isset($this->reserved[$name]));
 
-            $next = TokenContext::nextSignificant($tokens, $position);
-
-            if (null === $next || ':' !== $tokens[$next]) {
-                continue;
-            }
-
-            $previous = TokenContext::previousSignificant($tokens, $position);
-
-            if (null !== $previous && \in_array($tokens[$previous], ['(', ','], true)) {
-                return true;
-            }
-        }
-
-        return false;
+        return $name;
     }
 
     /**
-     * Property hooks (get/set) используют неявную переменную $value.
-     *
-     * @param list<array{0: int, 1: string, 2: int}|string> $tokens
+     * Генератор названия переменной по индексу.
      */
-    private function hasPropertyHooks(array $tokens): bool
-    {
-        foreach ($tokens as $position => $token) {
-            if (!\is_array($token) || \T_STRING !== $token[0]) {
-                continue;
-            }
-
-            if ('get' !== $token[1] && 'set' !== $token[1]) {
-                continue;
-            }
-
-            $next = TokenContext::nextSignificant($tokens, $position);
-
-            if (null !== $next && \is_array($tokens[$next]) && \T_DOUBLE_ARROW === $tokens[$next][0]) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Генератор названия переменной.
-     */
-    private function getVarName(int $varsSize): string
+    private function nameForIndex(int $index): string
     {
         $firstLetters = \array_merge(\range('a', 'z'), \range('A', 'Z'), ['_']);
         $secondLetters = \array_merge($firstLetters, \range(0, 9));
@@ -263,17 +159,17 @@ class VarOptimizer implements ModuleInterface
         $flSize = \count($firstLetters);
         $slSize = \count($secondLetters);
 
-        if ($varsSize < $flSize) {
-            return $firstLetters[$varsSize];
+        if ($index < $flSize) {
+            return $firstLetters[$index];
         }
 
-        $name = $firstLetters[$varsSize % $flSize];
-        $varsSize = \intdiv($varsSize, $flSize);
+        $name = $firstLetters[$index % $flSize];
+        $index = \intdiv($index, $flSize);
 
         do {
-            $name .= $secondLetters[$varsSize % $slSize];
-            $varsSize = \intdiv($varsSize, $slSize);
-        } while ($varsSize > 0);
+            $name .= $secondLetters[$index % $slSize];
+            $index = \intdiv($index, $slSize);
+        } while ($index > 0);
 
         return $name;
     }

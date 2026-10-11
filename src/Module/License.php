@@ -4,46 +4,49 @@ namespace PhpObfuscator\Module;
 
 use PhpObfuscator\ModuleInterface;
 use PhpObfuscator\PhpObfuscator;
+use PhpParser\Node\Expr\Assign;
+use PhpParser\Node\Expr\Variable;
+use PhpParser\Node\Scalar\String_;
+use PhpParser\Node\Stmt;
+use PhpParser\Node\Stmt\Declare_;
+use PhpParser\Node\Stmt\Expression;
+use PhpParser\Node\Stmt\HaltCompiler;
+use PhpParser\Node\Stmt\Namespace_;
+use PhpParser\NodeVisitorAbstract;
+use PhpParser\Parser;
+use PhpParser\ParserFactory;
 
 /**
  * Модуль лицензирования кода.
  *
- * ! Вызывать в конце pipeline
+ * ! Вызывать в конце pipeline.
  * Создаёт в начале кода строку $license = '';
- * Если в строку передана не действительная лицензия - код не будет работать
+ * Если в строку передана не действительная лицензия - код не будет работать.
  */
-class License implements ModuleInterface
+class License extends NodeVisitorAbstract implements ModuleInterface
 {
-    private bool $firstCall = true;
-
-    private int $skippedTextLength = 0;
-
     /**
-     * Глубина вложенности скобок при вставке периодической проверки.
-     */
-    private int $depth = 0;
-
-    private ?int $namespacePosition = null;
-
-    /**
-     * @var string код, вызываемый для проверки лицензии
+     * @var string код, вызываемый для проверки лицензии (обфусцированный)
      */
     private string $licenseBreakout;
     /**
-     * @var string код, находящийся в начале кода (первая проверка лицензии)
+     * @var string код первой проверки лицензии (обфусцированный, без присваивания шаблона)
      */
     private string $licenseVerifier;
 
+    private Parser $parser;
+
     /**
      * @param string            $key                Секретный ключ
-     * @param string            $invalidLicense     код, вызываемый при окончании лицензии
-     * @param ModuleInterface[] $obfuscatorPipeline модули объекта PhpObfuscator, которым будут обработаны вставки кода проверки лицензии
-     * @param int               $verifierFrequency  соотношение длины кода к длине модуля проверки лицензии
+     * @param string            $invalidLicense     код, вызываемый при недействительной лицензии
+     * @param string            $licenseTemplate    шаблон лицензии в коде
+     * @param ModuleInterface[] $obfuscatorPipeline модули, которым будут обработаны вставки кода проверки лицензии
+     * @param int               $verifierFrequency  как часто вставлять периодическую проверку (раз в N инструкций)
      */
     public function __construct(
         private readonly string $key = '',
         string $invalidLicense = 'die(\'Your license is invalid\');',
-        string $licenseTemplate = 'license goes here',
+        private readonly string $licenseTemplate = 'license goes here',
         array $obfuscatorPipeline = [new StringEncoder(), new SilentCalls()],
         private readonly int $verifierFrequency = 7,
     ) {
@@ -52,74 +55,51 @@ class License implements ModuleInterface
         }
 
         [$globalKey, $expireVar, $hashVar] = $this->getRandomStrings(3);
-        $licenseVar = 'license';
 
-        $escapedKey = \addslashes($this->key);
+        $keyLiteral = \var_export($this->key, true);
+        $globalKeyLiteral = \var_export($globalKey, true);
         $keyRepeat = (int) \ceil(15 / \strlen($this->key));
 
-        $breakout = '$'.$expireVar.'=hexdec(explode(\'-\',$GLOBALS[\''.$globalKey.'\']??\'\')[1]??\'0\');'
-            .'$'.$hashVar.'=substr(md5($'.$expireVar.'.\''.$escapedKey.'\'),0,15);'
+        $breakout = '$'.$expireVar.'=hexdec(explode(\'-\',$GLOBALS['.$globalKeyLiteral.']??\'\')[1]??\'0\');'
+            .'$'.$hashVar.'=substr(md5($'.$expireVar.'.'.$keyLiteral.'),0,15);'
             .'if(time()>$'.$expireVar.'||strtoupper($'.$hashVar.'.\'-\'.dechex($'.$expireVar.').\'-\''
-            .'.substr(md5($'.$hashVar.'^str_repeat(\''.$escapedKey.'\','.$keyRepeat.')),0,10))'
-            .'!=$GLOBALS[\''.$globalKey.'\']){'.$invalidLicense.'}';
+            .'.substr(md5($'.$hashVar.'^str_repeat('.$keyLiteral.','.$keyRepeat.')),0,10))'
+            .'!=$GLOBALS['.$globalKeyLiteral.']){'.$invalidLicense.'}';
 
-        $verifier = '(function($'.$licenseVar.'){$GLOBALS[\''.$globalKey.'\']=$'.$licenseVar.';'
-            .$breakout.'})($'.$licenseVar.');unset($'.$licenseVar.');';
+        $verifier = '(function($license){$GLOBALS['.$globalKeyLiteral.']=$license;'.$breakout.'})($license);unset($license);';
 
-        $this->licenseBreakout = \substr($this->obfuscateSnippet($breakout, $obfuscatorPipeline), 6);
-        $this->licenseVerifier = \substr($this->obfuscateSnippet($verifier, $obfuscatorPipeline), 6);
-        $this->licenseVerifier = "\n$".$licenseVar."='$licenseTemplate';\n".$this->licenseVerifier;
+        $this->licenseBreakout = $this->obfuscateSnippet($breakout, $obfuscatorPipeline);
+        $this->licenseVerifier = $this->obfuscateSnippet($verifier, $obfuscatorPipeline);
+        $this->parser = new ParserFactory()->createForHostVersion();
     }
 
-    public function process(string|array $token, array $tokens, int $position): string
+    public function beforeTraverse(array $nodes): ?array
     {
-        if (0 === $position) {
-            $this->firstCall = true;
-            $this->skippedTextLength = 0;
-            $this->depth = 0;
-            $this->namespacePosition = $this->findNamespace($tokens);
-        }
+        foreach ($nodes as $node) {
+            if ($node instanceof Namespace_ && null !== $node->stmts) {
+                $this->inject($node->stmts);
 
-        if (!$this->firstCall) {
-            $return = \is_array($token) ? $token[1] : $token;
-
-            $this->updateDepth($token);
-
-            $this->skippedTextLength += \strlen($return);
-
-            if (';' === $return
-                && 0 === $this->depth
-                && $this->skippedTextLength >= \strlen($this->licenseBreakout) * $this->verifierFrequency
-            ) {
-                $this->skippedTextLength = 0;
-
-                $return .= $this->licenseBreakout;
+                return $nodes;
             }
-
-            return $return;
         }
 
-        if (null !== $this->namespacePosition) {
-            if (';' === $token && $position > $this->namespacePosition) {
-                $this->firstCall = false;
+        $stmts = [];
 
-                return ';'.$this->licenseVerifier;
+        foreach ($nodes as $node) {
+            if ($node instanceof Stmt) {
+                $stmts[] = $node;
             }
-
-            return \is_array($token) ? $token[1] : $token;
         }
 
-        $this->firstCall = false;
+        $this->inject($stmts);
 
-        return '<?php'.$this->licenseVerifier;
+        return $stmts;
     }
 
     /**
      * Получение ключа лицензии.
      *
      * @param int $expireTimestamp - временная метка, до которой действует лицензия
-     *
-     * @return string - возвращает лицензионный ключ
      */
     public function getLicense(int $expireTimestamp): string
     {
@@ -132,8 +112,6 @@ class License implements ModuleInterface
 
     /**
      * Проверка лицензии.
-     *
-     * @param string $license - лицензионный ключ
      */
     public function checkLicense(string $license): bool
     {
@@ -143,37 +121,58 @@ class License implements ModuleInterface
     }
 
     /**
-     * @param list<array{0: int, 1: string, 2: int}|string> $tokens
+     * @param array<Stmt> $stmts
+     *
+     * @param-out array<\PhpParser\Node\Stmt> $stmts
      */
-    private function findNamespace(array $tokens): ?int
+    private function inject(array &$stmts): void
     {
-        foreach ($tokens as $position => $token) {
-            if (\is_array($token) && \T_NAMESPACE === $token[0]) {
-                return $position;
-            }
+        $setup = \array_merge(
+            [new Expression(new Assign(new Variable('license'), new String_($this->licenseTemplate)))],
+            $this->parser->parse($this->licenseVerifier) ?? [],
+        );
+
+        $index = 0;
+        while ($index < \count($stmts) && $stmts[$index] instanceof Declare_) {
+            ++$index;
         }
 
-        return null;
-    }
+        \array_splice($stmts, $index, 0, $setup);
 
-    /**
-     * @param array{0: int, 1: string, 2: int}|string $token
-     */
-    private function updateDepth(string|array $token): void
-    {
-        if (\is_array($token)) {
-            if (\in_array($token[0], [\T_CURLY_OPEN, \T_DOLLAR_OPEN_CURLY_BRACES], true)) {
-                ++$this->depth;
-            }
+        $breakout = $this->parser->parse($this->licenseBreakout) ?? [];
 
+        if ([] === $breakout || $this->verifierFrequency <= 0) {
             return;
         }
 
-        $this->depth += match ($token) {
-            '(', '[', '{' => 1,
-            ')', ']', '}' => -1,
-            default => 0,
-        };
+        $setupEnd = $index + \count($setup);
+        $result = [];
+        $count = 0;
+
+        foreach ($stmts as $position => $stmt) {
+            $result[] = $stmt;
+
+            // не вставляем внутрь setup (шаблон + verifier) и служебных инструкций
+            if ($position < $setupEnd) {
+                continue;
+            }
+
+            if ($stmt instanceof HaltCompiler) {
+                break;
+            }
+
+            if ($stmt instanceof Declare_ || $stmt instanceof Namespace_) {
+                continue;
+            }
+
+            if (0 === ++$count % $this->verifierFrequency) {
+                foreach ($breakout as $breakoutStmt) {
+                    $result[] = clone $breakoutStmt;
+                }
+            }
+        }
+
+        $stmts = $result;
     }
 
     /**
@@ -191,7 +190,7 @@ class License implements ModuleInterface
     }
 
     /**
-     * Получение набора уникальных случайных строк.
+     * Набор уникальных случайных имён (валидных идентификаторов).
      *
      * @return list<string>
      */
@@ -213,8 +212,7 @@ class License implements ModuleInterface
     }
 
     /**
-     * Получение рандомной строки. Первый символ всегда буква или "_",
-     * чтобы строка была валидным именем переменной.
+     * Случайное имя: первый символ — буква или "_".
      */
     private function getRandomString(int $min = 3, int $max = 67): string
     {

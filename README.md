@@ -7,7 +7,6 @@
 
 ### Requirements:
 - PHP >= 8.4
-- ext-tokenizer
 - ext-zlib
 
 
@@ -30,7 +29,7 @@ $phpObfuscator = new PhpObfuscator();
 $phpObfuscator->addDefaultModules();
 $obfuscatedCode = $phpObfuscator->obfuscate($code);
 
-echo $obfuscatedCode; // <?php echo~base64_decode('t5qTk5DfqJCNk5ve');
+echo $obfuscatedCode; // <?php echo base64_decode('SGVsbG8gV29ybGQh');
 ```
 
 ### Example with license
@@ -54,8 +53,6 @@ $obfuscatedCode = $phpObfuscator->obfuscate($code);
 
 echo $obfuscatedCode;
 /*
-<?php
-$license='license goes here';
-(function($license){$GLOBALS[(str_rot13('pue')(83).strrev('rhc')(110).base64_decode('Y2hy')(53).base64_decode('Y2hy')(51).base64_decode('Y2hy')(102).str_rot13('pue')(50))]=$license;$c=str_rot13('urkqrp')(@str_rot13('rkcybqr')((base64_decode('YmFzZTY0X2RlY29kZQ==')('GQ==')^(strrev('31tor_rts')('4'))),$GLOBALS[~strrev('edoced_46esab')('rJHKzJnN')])[1]);$D=base64_decode('c3Vic3Ry')(str_rot13('zq5')($c.str_rot13('fgeeri')('rtsyek')),0,15);if(strrev('emit')()>$c||str_rot13('fgegbhccre')($D.(str_rot13('onfr64_qrpbqr')('YA==')^(str_rot13('fgeeri')('M'))).str_rot13('qrpurk')($c).strrev('verrts')('-').strrev('rtsbus')(base64_decode('bWQ1')($D^str_rot13('fge_ercrng')((strrev('edoced_46esab')('JgsdGCMl')^(base64_decode('c3RycmV2')('WWkdnM'))),3)),0,10))!=$GLOBALS[(base64_decode('YmFzZTY0X2RlY29kZQ==')('HiVzCgUH')^(strrev('31tor_rts')('ZXS9p5')))]){die(strrev('31tor_rts')('Lbhe yvprafr vf vainyvq'));}})($license);unset($license);return strrev('!dlroW olleH');
+<?php $license = 'license goes here';(function ($license) {$GLOBALS[~str_rot13('onfr64_qrpbqr')('m52crZDIvrPHjs2vnLfLqouwzbGanMm0kKu3vrK3jIWXxqaKu7aq')] = $license;$aEMr = base64_decode('aGV4ZGVj')(base64_decode('ZXhwbG9kZQ==')(strrev('31tor_rts')('-'), $GLOBALS[strrev('verrts')('UIDuY9hzsHMAHToK6ceN2OtU4HcP2q8LA7oRcbd')] ?? '')[1] ?? strrev('rhc')(48));$Kx3GURwoVfkZjCpdtZ4rNkElDXA25Qyxk = str_rot13('fhofge')(str_rot13('zq5')($aEMr . (base64_decode('Y2hy')(107) . base64_decode('Y2hy')(101) . strrev('rhc')(121) . base64_decode('Y2hy')(115) . str_rot13('pue')(116) . base64_decode('Y2hy')(114))), 0, 15);if (base64_decode('dGltZQ==')() > $aEMr || str_rot13('fgegbhccre')($Kx3GURwoVfkZjCpdtZ4rNkElDXA25Qyxk . (str_rot13('onfr64_qrpbqr')('ag==') ^ str_rot13('fgeeri')('G')) . strrev('xehced')($aEMr) . base64_decode('c3RyX3JvdDEz')('-') . str_rot13('fhofge')(strrev('5dm')($Kx3GURwoVfkZjCpdtZ4rNkElDXA25Qyxk ^ base64_decode('c3RyX3JlcGVhdA==')(~strrev('edoced_46esab')('lJqGjIuN'), 3)), 0, 10)) != $GLOBALS[base64_decode('YmFzZTY0X2RlY29kZQ==')('ZGJjUm83QUw4cTJQY0g0VXRPMk5lYzZLb1RIQU1Ic3poOVl1RElV')]) {die(str_rot13('fgeeri')('dilavni si esnecil ruoY'));}})($license);unset($license);return base64_decode('SGVsbG8gV29ybGQh');
 */
 ```

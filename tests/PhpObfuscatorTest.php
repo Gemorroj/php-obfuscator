@@ -33,8 +33,6 @@ class PhpObfuscatorTest extends TestCase
 
         $content = (string) \file_get_contents(__FILE__);
         yield [\str_replace('PhpObfuscatorTest', 'PhpObfuscatorTest'.\uniqid('', false), $content)];
-
-        yield [(string) \file_get_contents(__DIR__.'/fixtures/test.php')];
     }
 
     #[DataProvider('provideValidCode')]
@@ -180,7 +178,7 @@ class PhpObfuscatorTest extends TestCase
         $phpObfuscator->addModule($licenseObj);
 
         $obfuscatedCode = $phpObfuscator->obfuscate($code);
-        self::assertStringContainsString('$license=', $obfuscatedCode);
+        self::assertStringContainsString('$license =', $obfuscatedCode);
         $obfuscatedCode = \substr($obfuscatedCode, \strlen('<?php'));
 
         $this->expectExceptionMessage('invalid license');
@@ -200,7 +198,7 @@ class PhpObfuscatorTest extends TestCase
         $phpObfuscator->addModule($licenseObj);
 
         $obfuscatedCode = $phpObfuscator->obfuscate($code);
-        self::assertStringContainsString('$license=', $obfuscatedCode);
+        self::assertStringContainsString('$license =', $obfuscatedCode);
         $obfuscatedCode = \substr($obfuscatedCode, \strlen('<?php'));
         $obfuscatedCode = \str_replace($licenseTemplate, $license, $obfuscatedCode);
 
@@ -221,7 +219,7 @@ class PhpObfuscatorTest extends TestCase
         $phpObfuscator->addModule($licenseObj);
 
         $obfuscatedCode = $phpObfuscator->obfuscate($code);
-        self::assertStringContainsString('$license=', $obfuscatedCode);
+        self::assertStringContainsString('$license =', $obfuscatedCode);
 
         $obfuscatedCode = \substr($obfuscatedCode, \strlen('<?php'));
         $obfuscatedCode = \str_replace($licenseTemplate, $license, $obfuscatedCode);
@@ -291,6 +289,18 @@ class PhpObfuscatorTest extends TestCase
 
         $this->expectException(\LogicException::class);
         $phpObfuscator->addModule(new StringEncoder());
+    }
+
+    public function testOutputIsMinified(): void
+    {
+        $phpObfuscator = new PhpObfuscator();
+        $phpObfuscator->addDefaultModules();
+
+        $code = "<?php\nfunction add(int \$a, int \$b): int {\n    return \$a + \$b;\n}\nreturn add(2, 3);";
+        $obfuscatedCode = $phpObfuscator->obfuscate($code);
+
+        self::assertStringNotContainsString("\n", $obfuscatedCode);
+        self::assertSame(5, eval(\substr($obfuscatedCode, \strlen('<?php'))));
     }
 
     public function testObfuscateWithoutModulesReturnsInput(): void

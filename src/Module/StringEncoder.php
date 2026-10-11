@@ -2,270 +2,145 @@
 
 namespace PhpObfuscator\Module;
 
+use PhpObfuscator\MinifiedPrettyPrinter;
 use PhpObfuscator\ModuleInterface;
+use PhpParser\Node;
+use PhpParser\Node\Arg;
+use PhpParser\Node\Attribute;
+use PhpParser\Node\Expr;
+use PhpParser\Node\Expr\BinaryOp\BitwiseXor;
+use PhpParser\Node\Expr\BinaryOp\Concat;
+use PhpParser\Node\Expr\BitwiseNot;
+use PhpParser\Node\Expr\FuncCall;
+use PhpParser\Node\Name;
+use PhpParser\Node\Param;
+use PhpParser\Node\PropertyHook;
+use PhpParser\Node\Scalar\Int_;
+use PhpParser\Node\Scalar\String_;
+use PhpParser\Node\StaticVar;
+use PhpParser\Node\Stmt\ClassConst;
+use PhpParser\Node\Stmt\Const_;
+use PhpParser\Node\Stmt\EnumCase;
+use PhpParser\Node\Stmt\Property;
+use PhpParser\NodeVisitorAbstract;
 
 /**
  * Модуль шифрования строк.
  */
-class StringEncoder implements ModuleInterface
+class StringEncoder extends NodeVisitorAbstract implements ModuleInterface
 {
     /**
-     * @var array<int, true> индексы токенов, которые нельзя шифровать
-     *                       (константные выражения: const, enum case, значения
-     *                       по умолчанию свойств/параметров/статических переменных,
-     *                       аргументы атрибутов)
+     * Стек признака «находимся в константном выражении».
+     *
+     * @var list<bool>
      */
-    private array $forbidden = [];
+    private array $stack = [];
+
+    private bool $constant = false;
+
+    private MinifiedPrettyPrinter $printer;
 
     /**
-     * @param int $compressLevel Степень сжатия строки с помощью gzdeflate. -1 - будет использоваться уровень сжатия по умолчанию библиотеки zlib. 0 - отключение сжатия.
+     * @param int $compressLevel Степень сжатия строки с помощью gzdeflate. -1 - уровень zlib по умолчанию. 0 - отключение сжатия.
      */
     public function __construct(private readonly int $compressLevel = -1)
     {
+        $this->printer = new MinifiedPrettyPrinter();
     }
 
-    public function process(string|array $token, array $tokens, int $position): string
+    public function beforeTraverse(array $nodes): ?array
     {
-        if (0 === $position) {
-            $this->forbidden = $this->computeForbidden($tokens);
+        $this->stack = [];
+        $this->constant = false;
+
+        return null;
+    }
+
+    public function enterNode(Node $node): ?int
+    {
+        $this->stack[] = $this->constant;
+
+        if ($node instanceof PropertyHook) {
+            // Тело хука — рантайм, а не константное выражение.
+            $this->constant = false;
+        } elseif ($this->isConstantContext($node)) {
+            $this->constant = true;
         }
 
-        if (!\is_array($token)) {
-            return $token;
+        return null;
+    }
+
+    public function leaveNode(Node $node): Node|int|array|null
+    {
+        $constant = $this->constant;
+        $this->constant = (bool) \array_pop($this->stack);
+
+        if ($node instanceof String_ && !$constant) {
+            return $this->encode($node->value);
         }
 
-        if (\T_CONSTANT_ENCAPSED_STRING !== $token[0]) {
-            return $token[1];
-        }
-
-        if (isset($this->forbidden[$position])) {
-            return $token[1];
-        }
-
-        return $this->encodeString($this->decodeStringLiteral($token[1]));
+        return null;
     }
 
     /**
-     * Получение фактического значения строкового литерала.
-     *
-     * Токен T_CONSTANT_ENCAPSED_STRING всегда является обычной строкой,
-     * поэтому безопасно вычисляется через eval.
+     * Контексты, где допустимы только константные выражения (вызовы функций нельзя).
      */
-    private function decodeStringLiteral(string $literal): string
+    private function isConstantContext(Node $node): bool
     {
-        $value = eval('return '.$literal.';');
-
-        return \is_string($value) ? $value : '';
+        return $node instanceof ClassConst
+            || $node instanceof Const_
+            || $node instanceof EnumCase
+            || $node instanceof Property
+            || $node instanceof Param
+            || $node instanceof StaticVar
+            || $node instanceof Attribute;
     }
 
-    /**
-     * Поиск строк, находящихся в константных выражениях.
-     *
-     * @param list<array{0: int, 1: string, 2: int}|string> $tokens
-     *
-     * @return array<int, true>
-     */
-    private function computeForbidden(array $tokens): array
-    {
-        $forbidden = [];
-        $context = TokenContext::analyze($tokens);
-        $count = \count($tokens);
-        $awaitingParams = false;
-
-        for ($i = 0; $i < $count; ++$i) {
-            $token = $tokens[$i];
-
-            if (!\is_array($token)) {
-                if ('(' === $token && $awaitingParams) {
-                    $end = $this->findClosing($tokens, $i, '(');
-                    $this->forbidRange($forbidden, $i, $end);
-                    $awaitingParams = false;
-                    $i = $end;
-                } elseif ('=' === $token
-                    && 'class' === $context['brace'][$i]
-                    && 0 === $context['paren'][$i]
-                    && 0 === $context['bracket'][$i]
-                ) {
-                    $end = $this->findTerminator($tokens, $i, ';');
-                    $this->forbidRange($forbidden, $i, $end);
-                    $i = $end;
-                } elseif (';' === $token) {
-                    $awaitingParams = false;
-                }
-
-                continue;
-            }
-
-            switch ($token[0]) {
-                case \T_CONST:
-                    $end = $this->findTerminator($tokens, $i, ';');
-                    $this->forbidRange($forbidden, $i, $end);
-                    $i = $end;
-                    break;
-
-                case \T_ATTRIBUTE:
-                    $end = $this->findClosing($tokens, $i, '[');
-                    $this->forbidRange($forbidden, $i, $end);
-                    $i = $end;
-                    break;
-
-                case \T_STATIC:
-                    $next = TokenContext::nextSignificant($tokens, $i);
-                    if (null !== $next && \is_array($tokens[$next]) && \T_VARIABLE === $tokens[$next][0]) {
-                        $end = $this->findTerminator($tokens, $i, ';');
-                        $this->forbidRange($forbidden, $i, $end);
-                        $i = $end;
-                    }
-                    break;
-
-                case \T_FUNCTION:
-                case \T_FN:
-                    $awaitingParams = true;
-                    break;
-            }
-        }
-
-        return $forbidden;
-    }
-
-    /**
-     * @param array<int, true> $forbidden
-     */
-    private function forbidRange(array &$forbidden, int $start, int $end): void
-    {
-        for ($i = $start; $i <= $end; ++$i) {
-            $forbidden[$i] = true;
-        }
-    }
-
-    /**
-     * Поиск завершающего токена (например ";") на нулевой глубине скобок.
-     *
-     * @param list<array{0: int, 1: string, 2: int}|string> $tokens
-     */
-    private function findTerminator(array $tokens, int $start, string $terminator): int
-    {
-        $count = \count($tokens);
-        $paren = 0;
-        $bracket = 0;
-        $brace = 0;
-
-        for ($i = $start + 1; $i < $count; ++$i) {
-            $token = $tokens[$i];
-
-            if (\is_array($token)) {
-                continue;
-            }
-
-            switch ($token) {
-                case '(':
-                    ++$paren;
-                    break;
-                case ')':
-                    --$paren;
-                    break;
-                case '[':
-                    ++$bracket;
-                    break;
-                case ']':
-                    --$bracket;
-                    break;
-                case '{':
-                    ++$brace;
-                    break;
-                case '}':
-                    --$brace;
-                    break;
-                default:
-                    if ($token === $terminator && 0 === $paren && 0 === $bracket && 0 === $brace) {
-                        return $i;
-                    }
-            }
-        }
-
-        return $count - 1;
-    }
-
-    /**
-     * Поиск закрывающей скобки для "(" или "[" (T_ATTRIBUTE трактуется как "[").
-     *
-     * @param list<array{0: int, 1: string, 2: int}|string> $tokens
-     */
-    private function findClosing(array $tokens, int $start, string $open): int
-    {
-        $close = '(' === $open ? ')' : ']';
-        $count = \count($tokens);
-        $depth = 0;
-
-        for ($i = $start; $i < $count; ++$i) {
-            $token = $tokens[$i];
-
-            if (\is_array($token)) {
-                if (\T_ATTRIBUTE === $token[0]) {
-                    ++$depth;
-                }
-
-                continue;
-            }
-
-            if ($open === $token) {
-                ++$depth;
-            } elseif ($close === $token) {
-                --$depth;
-
-                if (0 === $depth) {
-                    return $i;
-                }
-            }
-        }
-
-        return $count - 1;
-    }
-
-    /**
-     * Шифрование строки.
-     */
-    private function encodeString(string $string): string
+    private function encode(string $string): Expr
     {
         if ('' === $string) {
-            return '\'\'';
+            return new String_('');
         }
 
         if (0 !== $this->compressLevel) {
             $deflated = \gzdeflate($string, $this->compressLevel);
 
             if (false !== $deflated) {
-                $decompressor = 'gzinflate(base64_decode(\''.\base64_encode($deflated).'\'))';
+                $decompressor = new FuncCall(new Name('gzinflate'), [
+                    new Arg(Encoder::call('base64_decode', \base64_encode($deflated))),
+                ]);
 
-                if (\strlen($decompressor) <= \strlen($string)) {
+                if (\strlen($this->printer->prettyPrintExpr($decompressor)) <= \strlen($string)) {
                     return $decompressor;
                 }
             }
         }
 
-        // Кастомные функции шифрования
         $advancedEncoders = [
-            static function (string $string): string {
-                $return = [];
-                $length = \strlen($string);
+            static function (string $string): Expr {
+                $result = null;
 
-                for ($i = 0; $i < $length; ++$i) {
-                    $return[] = 'chr('.\ord($string[$i]).')';
+                for ($i = 0, $length = \strlen($string); $i < $length; ++$i) {
+                    $char = new FuncCall(new Name('chr'), [new Arg(new Int_(\ord($string[$i])))]);
+                    $result = null === $result ? $char : new Concat($result, $char);
                 }
 
-                return '('.\implode('.', $return).')';
+                return $result ?? new String_('');
             },
 
-            static function (string $string): string {
-                return '~base64_decode(\''.\base64_encode(~$string).'\')';
+            static function (string $string): Expr {
+                return new BitwiseNot(Encoder::call('base64_decode', \base64_encode(~$string)));
             },
 
-            function (string $string): string {
+            function (string $string): Expr {
                 $key = \base64_encode(\md5((string) \microtime(true), true));
                 $size = \strlen($string);
                 $key = \substr(\str_repeat($key, (int) \ceil($size / \strlen($key))), 0, $size);
 
-                return '(base64_decode(\''.\base64_encode($string ^ $key).'\')^('.$this->encodeString($key).'))';
+                return new BitwiseXor(
+                    Encoder::call('base64_decode', \base64_encode($string ^ $key)),
+                    $this->encode($key),
+                );
             },
         ];
 
@@ -274,7 +149,7 @@ class StringEncoder implements ModuleInterface
         $encoder = \random_int(0, $basicCount + $advancedCount - 1);
 
         if ($encoder < $basicCount) {
-            return Encoder::encode($string);
+            return Encoder::encodeBasic($string);
         }
 
         return $advancedEncoders[$encoder - $basicCount]($string);
