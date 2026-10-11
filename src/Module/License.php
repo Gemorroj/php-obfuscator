@@ -15,7 +15,15 @@ use PhpObfuscator\PhpObfuscator;
 class License implements ModuleInterface
 {
     private bool $firstCall = true;
-    private int $tokenPosition = -1;
+
+    private int $skippedTextLength = 0;
+
+    /**
+     * Глубина вложенности скобок при вставке периодической проверки.
+     */
+    private int $depth = 0;
+
+    private ?int $namespacePosition = null;
 
     /**
      * @var string код, вызываемый для проверки лицензии
@@ -26,56 +34,63 @@ class License implements ModuleInterface
      */
     private string $licenseVerifier;
 
-    private int $skippedTextLength = 0;
-
     /**
      * @param string            $key                Секретный ключ
      * @param string            $invalidLicense     код, вызываемый при окончании лицензии
      * @param ModuleInterface[] $obfuscatorPipeline модули объекта PhpObfuscator, которым будут обработаны вставки кода проверки лицензии
-     * @param int               $verifyerFrequency  соотношение длины кода к длине модуля проверки лицензии
+     * @param int               $verifierFrequency  соотношение длины кода к длине модуля проверки лицензии
      */
     public function __construct(
         private readonly string $key = '',
         string $invalidLicense = 'die(\'Your license is invalid\');',
         string $licenseTemplate = 'license goes here',
         array $obfuscatorPipeline = [new StringEncoder(), new SilentCalls()],
-        private readonly int $verifyerFrequency = 7,
+        private readonly int $verifierFrequency = 7,
     ) {
-        $chars = \array_merge(\range('a', 'z'), \range('A', 'Z'), ['_']);
-        $licenseTags = [
-            'license',
-            $this->getRandomString(),
-            $chars[\array_rand($chars)],
-            $chars[\array_rand($chars)],
-        ];
-
-        $this->licenseBreakout = "\${$licenseTags[2]}=hexdec(@explode('-',\$GLOBALS['{$licenseTags[1]}'])[1]);\${$licenseTags[3]}=substr(md5(\${$licenseTags[2]}.'".\addslashes($this->key)."'),0,15);if(time()>\${$licenseTags[2]}||strtoupper(\${$licenseTags[3]}.'-'.dechex(\${$licenseTags[2]}).'-'.substr(md5(\${$licenseTags[3]}^str_repeat('".\addslashes($this->key)."',".\ceil(15 / \strlen(\addslashes($this->key))).")),0,10))!=\$GLOBALS['{$licenseTags[1]}']){".$invalidLicense.'}';
-        $this->licenseVerifier = "(function(\${$licenseTags[0]}){\$GLOBALS['{$licenseTags[1]}']=\${$licenseTags[0]};".$this->licenseBreakout."})(\${$licenseTags[0]});unset(\${$licenseTags[0]});";
-
-        $phpObfuscatorLicenseVerifier = new PhpObfuscator();
-        foreach ($obfuscatorPipeline as $module) {
-            $phpObfuscatorLicenseVerifier->addModule($module);
+        if ('' === $this->key) {
+            throw new \InvalidArgumentException('License key must not be empty.');
         }
-        $this->licenseVerifier = \substr($phpObfuscatorLicenseVerifier->obfuscate('<?php '.$this->licenseVerifier), 6);
-        $this->licenseVerifier = "\n\${$licenseTags[0]}='$licenseTemplate';\n".$this->licenseVerifier;
 
-        $phpObfuscatorLicenseBreakout = new PhpObfuscator();
-        foreach ($obfuscatorPipeline as $module) {
-            $phpObfuscatorLicenseBreakout->addModule($module);
-        }
-        $this->licenseBreakout = \substr($phpObfuscatorLicenseBreakout->obfuscate('<?php '.$this->licenseBreakout), 6);
+        [$globalKey, $expireVar, $hashVar] = $this->getRandomStrings(3);
+        $licenseVar = 'license';
+
+        $escapedKey = \addslashes($this->key);
+        $keyRepeat = (int) \ceil(15 / \strlen($this->key));
+
+        $breakout = '$'.$expireVar.'=hexdec(explode(\'-\',$GLOBALS[\''.$globalKey.'\']??\'\')[1]??\'0\');'
+            .'$'.$hashVar.'=substr(md5($'.$expireVar.'.\''.$escapedKey.'\'),0,15);'
+            .'if(time()>$'.$expireVar.'||strtoupper($'.$hashVar.'.\'-\'.dechex($'.$expireVar.').\'-\''
+            .'.substr(md5($'.$hashVar.'^str_repeat(\''.$escapedKey.'\','.$keyRepeat.')),0,10))'
+            .'!=$GLOBALS[\''.$globalKey.'\']){'.$invalidLicense.'}';
+
+        $verifier = '(function($'.$licenseVar.'){$GLOBALS[\''.$globalKey.'\']=$'.$licenseVar.';'
+            .$breakout.'})($'.$licenseVar.');unset($'.$licenseVar.');';
+
+        $this->licenseBreakout = \substr($this->obfuscateSnippet($breakout, $obfuscatorPipeline), 6);
+        $this->licenseVerifier = \substr($this->obfuscateSnippet($verifier, $obfuscatorPipeline), 6);
+        $this->licenseVerifier = "\n$".$licenseVar."='$licenseTemplate';\n".$this->licenseVerifier;
     }
 
-    public function process(string|array $token, array $tokens): string
+    public function process(string|array $token, array $tokens, int $position): string
     {
-        ++$this->tokenPosition;
+        if (0 === $position) {
+            $this->firstCall = true;
+            $this->skippedTextLength = 0;
+            $this->depth = 0;
+            $this->namespacePosition = $this->findNamespace($tokens);
+        }
 
         if (!$this->firstCall) {
             $return = \is_array($token) ? $token[1] : $token;
 
+            $this->updateDepth($token);
+
             $this->skippedTextLength += \strlen($return);
 
-            if (';' === $return && $this->skippedTextLength >= \strlen($this->licenseBreakout) * $this->verifyerFrequency) {
+            if (';' === $return
+                && 0 === $this->depth
+                && $this->skippedTextLength >= \strlen($this->licenseBreakout) * $this->verifierFrequency
+            ) {
                 $this->skippedTextLength = 0;
 
                 $return .= $this->licenseBreakout;
@@ -84,18 +99,8 @@ class License implements ModuleInterface
             return $return;
         }
 
-        $namespace = false;
-
-        foreach ($tokens as $id => $t) {
-            if (\T_NAMESPACE === $t[0]) {
-                $namespace = true;
-
-                break;
-            }
-        }
-
-        if ($namespace) {
-            if (';' === $token && $this->tokenPosition > $id) {
+        if (null !== $this->namespacePosition) {
+            if (';' === $token && $position > $this->namespacePosition) {
                 $this->firstCall = false;
 
                 return ';'.$this->licenseVerifier;
@@ -118,8 +123,9 @@ class License implements ModuleInterface
      */
     public function getLicense(int $expireTimestamp): string
     {
+        $repeat = (int) \ceil(15 / \strlen($this->key));
         $hash = \substr(\md5($expireTimestamp.$this->key), 0, 15);
-        $mask = \substr(\md5($hash ^ \str_repeat($this->key, \ceil(15 / \strlen($this->key)))), 0, 10);
+        $mask = \substr(\md5($hash ^ \str_repeat($this->key, $repeat)), 0, 10);
 
         return \strtoupper($hash.'-'.\dechex($expireTimestamp).'-'.$mask);
     }
@@ -131,23 +137,96 @@ class License implements ModuleInterface
      */
     public function checkLicense(string $license): bool
     {
-        $expireTimestamp = \hexdec(@\explode('-', $license)[1]);
+        $expireTimestamp = (int) \hexdec(\explode('-', $license)[1] ?? '0');
 
         return $expireTimestamp > \time() && $this->getLicense($expireTimestamp) === $license;
     }
 
     /**
-     * Получение рандомной строки.
+     * @param list<array{0: int, 1: string, 2: int}|string> $tokens
+     */
+    private function findNamespace(array $tokens): ?int
+    {
+        foreach ($tokens as $position => $token) {
+            if (\is_array($token) && \T_NAMESPACE === $token[0]) {
+                return $position;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param array{0: int, 1: string, 2: int}|string $token
+     */
+    private function updateDepth(string|array $token): void
+    {
+        if (\is_array($token)) {
+            if (\in_array($token[0], [\T_CURLY_OPEN, \T_DOLLAR_OPEN_CURLY_BRACES], true)) {
+                ++$this->depth;
+            }
+
+            return;
+        }
+
+        $this->depth += match ($token) {
+            '(', '[', '{' => 1,
+            ')', ']', '}' => -1,
+            default => 0,
+        };
+    }
+
+    /**
+     * @param ModuleInterface[] $obfuscatorPipeline
+     */
+    private function obfuscateSnippet(string $code, array $obfuscatorPipeline): string
+    {
+        $phpObfuscator = new PhpObfuscator();
+
+        foreach ($obfuscatorPipeline as $module) {
+            $phpObfuscator->addModule($module);
+        }
+
+        return $phpObfuscator->obfuscate('<?php '.$code);
+    }
+
+    /**
+     * Получение набора уникальных случайных строк.
+     *
+     * @return list<string>
+     */
+    private function getRandomStrings(int $count): array
+    {
+        $strings = [];
+
+        while (\count($strings) < $count) {
+            $string = $this->getRandomString();
+
+            if ('license' === $string || \in_array($string, $strings, true)) {
+                continue;
+            }
+
+            $strings[] = $string;
+        }
+
+        return $strings;
+    }
+
+    /**
+     * Получение рандомной строки. Первый символ всегда буква или "_",
+     * чтобы строка была валидным именем переменной.
      */
     private function getRandomString(int $min = 3, int $max = 67): string
     {
-        $chars = \array_merge(\range('a', 'z'), \range('A', 'Z'), \range(0, 9));
+        $firstChars = \array_merge(\range('a', 'z'), \range('A', 'Z'), ['_']);
+        $otherChars = \array_merge($firstChars, \range('0', '9'));
 
         $length = \random_int($min, $max);
-        $string = '';
 
-        for ($i = 0; $i < $length; ++$i) {
-            $string .= $chars[\array_rand($chars)];
+        $string = $firstChars[\array_rand($firstChars)];
+
+        for ($i = 1; $i < $length; ++$i) {
+            $string .= $otherChars[\array_rand($otherChars)];
         }
 
         return $string;

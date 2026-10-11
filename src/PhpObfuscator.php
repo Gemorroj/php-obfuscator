@@ -12,13 +12,12 @@ use PhpObfuscator\Module\WhitespaceStrip;
 class PhpObfuscator
 {
     /**
-     * @var ModuleInterface[]
+     * @var list<ModuleInterface>
      */
     public array $modules = [];
 
     public function obfuscate(string $code): string
     {
-        $obfuscated = '';
         foreach ($this->modules as $module) {
             $obfuscated = '';
             $tokens = \token_get_all($code);
@@ -26,14 +25,14 @@ class PhpObfuscator
             /*
              * token: "[char]" or [TOKEN_ID, "[char(s)]", [line]]
              */
-            foreach ($tokens as $token) {
-                $obfuscated .= $module->process($token, $tokens);
+            foreach ($tokens as $position => $token) {
+                $obfuscated .= $module->process($token, $tokens, $position);
             }
 
             $code = $obfuscated;
         }
 
-        return $obfuscated;
+        return $code;
     }
 
     public function addDefaultModules(): self
@@ -51,7 +50,7 @@ class PhpObfuscator
     {
         foreach ($this->modules as $existedModule) {
             if ($existedModule instanceof License) {
-                throw new \Exception('License module is already in use. You cannot add new modules.');
+                throw new \LogicException('License module is already in use. You cannot add new modules.');
             }
         }
 
