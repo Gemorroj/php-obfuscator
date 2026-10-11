@@ -1,7 +1,7 @@
 {
     "name": "gemorroj/php-obfuscator",
     "description": "PHP obfuscator",
-    "keywords": ["php","obfuscator","obfuscation"],
+    "keywords": ["php", "obfuscator", "obfuscation"],
     "type": "library",
     "license": "LGPL-3.0-or-later",
     "authors": [
@@ -17,7 +17,7 @@
     "require-dev": {
         "phpunit/phpunit": "^12.5.17||^13",
         "friendsofphp/php-cs-fixer": "^3.95",
-        "phpstan/phpstan": "^2.2"
+        "phpstan/phpstan": "^2.3"
     },
     "autoload": {
         "psr-4": {
